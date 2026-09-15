@@ -1,0 +1,9 @@
+{
+  "name": "Apliurban",
+  "short_name": "Apliurban",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#f9fafb",
+  "theme_color": "#1d4ed8",
+  "icons": []
+}
