@@ -45,7 +45,7 @@ async function loadOrders() {
     .select("id,order_number,client,work_type,status,current_location,current_holder_id,created_at,updated_at,workers!current_holder_id(name)")
     .neq("status", "picked_up")
     .order("order_number");
-  if (error) { toast("Error cargando órdenes"); return; }
+  if (error) { toast("Error: " + error.message); console.error("loadOrders error:", error); return; }
   orders = data;
   renderOrderList();
 }
@@ -324,9 +324,8 @@ document.getElementById("btn-continue-neworder").addEventListener("click", async
     p_worker_id: creatorId, p_pin: pin
   });
   if (error) {
-    if (error.message.includes("duplicate")) toast("Ese número de orden ya existe");
-    else if (error.message.includes("PIN") || error.message.includes("permiso")) toast("PIN incorrecto o sin permiso");
-    else toast("No se pudo crear la orden");
+    toast("Error: " + error.message);
+    console.error("create_order error:", error);
     return;
   }
   toast("Orden creada");
