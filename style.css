@@ -66,6 +66,26 @@ body {
 .status-finished .status-dot { background: var(--blue); }
 .status-picked_up .status-dot, .status-picked_up { color: var(--text-secondary); }
 .status-picked_up .status-dot { background: var(--text-secondary); }
+.status-paused { color: #b45309; font-weight: 600; }
+
+.order-row-paused {
+  background: #fff7ed; border: 1.5px solid #f59e0b;
+}
+
+.detail-timer-box {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+  padding: 16px; margin-bottom: 16px; text-align: center;
+}
+.detail-timer-box.paused-box { background: #fff7ed; border: 1.5px solid #f59e0b; }
+.paused-label { font-size: 13px; font-weight: 600; color: #b45309; margin: 0 0 12px; }
+.dual-btn-row { display: flex; gap: 8px; }
+.dual-btn-row button {
+  flex: 1; height: 48px; font-size: 14px; font-weight: 600; border-radius: 10px; border: none;
+}
+.pause-btn { background: #f59e0b; color: #fff; }
+.resume-btn { background: #16a34a; color: #fff; }
+.finish-btn { background: var(--surface); color: var(--text-secondary); border: 1px solid var(--border-strong) !important; }
+.finish-btn-alt { background: #fff; color: var(--text-secondary); border: 1px solid var(--border-strong) !important; }
 
 .fab-btn {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);

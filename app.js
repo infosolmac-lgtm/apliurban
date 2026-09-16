@@ -4,6 +4,7 @@ const STATUS_LABELS = {
   unassigned: "Sin asignar",
   pending_start: "Pendiente",
   in_production: "En producción",
+  paused: "Pausada",
   finished: "Terminada",
   picked_up: "Recogida",
 };
@@ -42,7 +43,7 @@ async function loadWorkers() {
 async function loadOrders() {
   const { data, error } = await sb
     .from("orders")
-    .select("id,order_number,client,work_type,status,current_location,current_holder_id,created_at,updated_at,workers!current_holder_id(name)")
+    .select("id,order_number,client,work_type,status,current_location,current_holder_id,paused_at,created_at,updated_at,workers!current_holder_id(name)")
     .neq("status", "picked_up")
     .order("order_number");
   if (error) { toast("Error: " + error.message); console.error("loadOrders error:", error); return; }
@@ -53,6 +54,11 @@ async function loadOrders() {
 function workerName(id) {
   const w = workers.find(w => w.id === id);
   return w ? w.name : null;
+}
+
+function pauseMinutes(pausedAt) {
+  if (!pausedAt) return 0;
+  return Math.floor((Date.now() - new Date(pausedAt).getTime()) / 60000);
 }
 
 /* ---------- render lista principal ---------- */
@@ -73,15 +79,18 @@ function renderOrderList() {
     list.forEach(o => {
       const holder = o.workers ? o.workers.name : null;
       const sub = holder || (o.status === "unassigned" ? "Sin asignar" : "");
+      const isPaused = o.status === "paused";
+      const rowClass = isPaused ? "order-row order-row-paused" : "order-row";
+      const statusHtml = isPaused
+        ? `<span class="status-tag status-paused">⏸ ${pauseMinutes(o.paused_at)}m</span>`
+        : `<span class="status-tag status-${o.status}"><span class="status-dot"></span>${STATUS_LABELS[o.status]}</span>`;
       html += `
-        <div class="order-row" data-id="${o.id}">
+        <div class="${rowClass}" data-id="${o.id}">
           <div class="order-row-left">
-            <span class="order-num">1 ${o.order_number}</span>
+            <span class="order-num">${o.order_number[0]} ${o.order_number.slice(1)}</span>
             <span class="order-sub">${sub}</span>
           </div>
-          <span class="status-tag status-${o.status}">
-            <span class="status-dot"></span>${STATUS_LABELS[o.status]}
-          </span>
+          ${statusHtml}
         </div>`;
     });
   }
@@ -106,23 +115,43 @@ async function openDetail(id) {
 function renderDetail(o) {
   const holder = o.workers ? o.workers.name : "Sin asignar";
   let actions = "";
+  let boxClass = "detail-timer-box";
+  let statusLine = "";
 
   if (o.status === "unassigned" || o.status === "finished") {
-    actions += `<button class="primary-btn" id="act-deliver">Pasar orden</button>`;
+    actions = `<button class="primary-btn" id="act-deliver">Pasar orden</button>`;
   }
   if (o.status === "pending_start") {
-    actions += `<button class="primary-btn" id="act-start">Iniciar</button>`;
-    actions += `<button class="secondary-btn" id="act-deliver">Pasar orden</button>`;
+    actions = `
+      <button class="primary-btn" id="act-start">Iniciar</button>
+      <button class="secondary-btn" id="act-deliver">Pasar orden</button>`;
   }
   if (o.status === "in_production") {
-    actions += `<button class="primary-btn" id="act-finish">Finalizar</button>`;
+    actions = `
+      <div class="dual-btn-row">
+        <button class="pause-btn" id="act-pause">⏸ Pausar</button>
+        <button class="finish-btn" id="act-finish">Finalizar</button>
+      </div>`;
+  }
+  if (o.status === "paused") {
+    boxClass = "detail-timer-box paused-box";
+    statusLine = `<p class="paused-label">⏸ Pausada · ${pauseMinutes(o.paused_at)}m</p>`;
+    actions = `
+      <div class="dual-btn-row">
+        <button class="resume-btn" id="act-resume">▶ Reanudar</button>
+        <button class="finish-btn-alt" id="act-finish">Finalizar</button>
+      </div>`;
   }
   if (o.status === "finished") {
-    actions += `<button class="secondary-btn" id="act-control">Control final y recogida (Juan)</button>`;
+    actions = `<button class="secondary-btn" id="act-control">Control final y recogida (Juan)</button>`;
   }
 
   document.getElementById("detail-content").innerHTML = `
-    <p class="detail-order-num">1 ${o.order_number}</p>
+    <div class="${boxClass}">
+      <p class="detail-order-num">${o.order_number[0]} ${o.order_number.slice(1)}</p>
+      ${statusLine}
+      ${actions}
+    </div>
     <span class="detail-type-badge">${TYPE_LABELS[o.work_type]}</span>
     <table class="detail-fields">
       <tr><td>Cliente</td><td>${o.client || "—"}</td></tr>
@@ -130,7 +159,6 @@ function renderDetail(o) {
       <tr><td>Responsable</td><td>${holder}</td></tr>
       <tr><td>Estado</td><td>${STATUS_LABELS[o.status]}</td></tr>
     </table>
-    <div class="detail-actions">${actions}</div>
   `;
 
   const startBtn = document.getElementById("act-start");
@@ -141,6 +169,10 @@ function renderDetail(o) {
   if (deliverBtn) deliverBtn.addEventListener("click", () => handleDeliver(o));
   const controlBtn = document.getElementById("act-control");
   if (controlBtn) controlBtn.addEventListener("click", () => handleControl(o));
+  const pauseBtn = document.getElementById("act-pause");
+  if (pauseBtn) pauseBtn.addEventListener("click", () => handlePause(o));
+  const resumeBtn = document.getElementById("act-resume");
+  if (resumeBtn) resumeBtn.addEventListener("click", () => handleResume(o));
 }
 
 /* ---------- modal PIN reutilizable ---------- */
@@ -245,6 +277,24 @@ async function handleFinish(o) {
   const { error } = await sb.rpc("finish_order", { p_order_id: o.id, p_worker_id: workerId, p_pin: pin });
   if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo finalizar"); return; }
   toast("Trabajo finalizado");
+  await loadOrders(); openDetail(o.id);
+}
+
+async function handlePause(o) {
+  const pin = await askPin(o.workers ? o.workers.name : "");
+  if (!pin) return;
+  const { error } = await sb.rpc("pause_order", { p_order_id: o.id, p_worker_id: o.current_holder_id, p_pin: pin });
+  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo pausar"); return; }
+  toast("Orden pausada");
+  await loadOrders(); openDetail(o.id);
+}
+
+async function handleResume(o) {
+  const pin = await askPin(o.workers ? o.workers.name : "");
+  if (!pin) return;
+  const { error } = await sb.rpc("resume_order", { p_order_id: o.id, p_worker_id: o.current_holder_id, p_pin: pin });
+  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo reanudar"); return; }
+  toast("Orden reanudada");
   await loadOrders(); openDetail(o.id);
 }
 
@@ -471,4 +521,12 @@ async function loadReport() {
 (async function init() {
   await loadWorkers();
   await loadOrders();
+  setInterval(() => {
+    if (document.getElementById("screen-main").classList.contains("active")) {
+      renderOrderList();
+    }
+    if (document.getElementById("screen-detail").classList.contains("active") && currentDetailOrder) {
+      renderDetail(currentDetailOrder);
+    }
+  }, 30000);
 })();
