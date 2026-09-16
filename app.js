@@ -529,4 +529,17 @@ async function loadReport() {
       renderDetail(currentDetailOrder);
     }
   }, 30000);
+
+  sb.channel("orders-realtime")
+    .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, async (payload) => {
+      await loadOrders();
+      if (
+        document.getElementById("screen-detail").classList.contains("active") &&
+        currentDetailOrder &&
+        payload.new && payload.new.id === currentDetailOrder.id
+      ) {
+        openDetail(currentDetailOrder.id);
+      }
+    })
+    .subscribe();
 })();
