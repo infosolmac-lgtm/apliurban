@@ -8,14 +8,29 @@ const STATUS_LABELS = {
   finished: "Terminada",
   picked_up: "Recogida",
 };
+const ASSIGN_LABELS = { pending_start: "Pendiente", in_production: "Trabajando", paused: "Pausada", finished: "Terminado", transferred: "Transferido" };
 const LOCATION_LABELS = { nave1: "Nave 1", nave2: "Nave 2", recogida: "Recogida" };
 const TYPE_LABELS = { spa_cover: "Cubierta SPA", custom_tarp: "Lona a medida" };
+const PAUSE_REASONS = [
+  { id: "falta_material", label: "Falta de material" },
+  { id: "error_orden", label: "Error en orden" },
+  { id: "verificacion_jorge", label: "Verificación con Jorge" },
+  { id: "ausente", label: "Ausente" },
+  { id: "otra", label: "Otra" },
+];
+const DELIVERY_TYPES = [
+  { id: "con_etiqueta", label: "Con etiqueta de envío" },
+  { id: "sin_etiqueta", label: "Sin etiqueta" },
+  { id: "recogida_cliente", label: "Recogida por el cliente" },
+  { id: "jorge_lleva", label: "Jorge la llevará" },
+];
 
 let workers = [];
 let orders = [];
 let currentDetailOrder = null;
 let newOrderDigits = "";
 let newOrderType = null;
+let newOrderNave = null;
 
 /* ---------- navegación ---------- */
 function showScreen(id) {
@@ -33,22 +48,19 @@ function toast(msg) {
   setTimeout(() => t.classList.add("hidden"), 2600);
 }
 
+function isBreakfastTime() {
+  const now = new Date();
+  const day = now.getDay();
+  if (day === 0 || day === 6) return false;
+  const mins = now.getHours() * 60 + now.getMinutes();
+  return mins >= 540 && mins <= 570;
+}
+
 /* ---------- carga de datos ---------- */
 async function loadWorkers() {
   const { data, error } = await sb.from("workers").select("id,name,active").eq("active", true);
   if (error) { toast("Error cargando trabajadores"); return; }
   workers = data;
-}
-
-async function loadOrders() {
-  const { data, error } = await sb
-    .from("orders")
-    .select("id,order_number,client,work_type,status,current_location,current_holder_id,paused_at,created_at,updated_at,workers!current_holder_id(name)")
-    .neq("status", "picked_up")
-    .order("order_number");
-  if (error) { toast("Error: " + error.message); console.error("loadOrders error:", error); return; }
-  orders = data;
-  renderOrderList();
 }
 
 function workerName(id) {
@@ -59,6 +71,27 @@ function workerName(id) {
 function pauseMinutes(pausedAt) {
   if (!pausedAt) return 0;
   return Math.floor((Date.now() - new Date(pausedAt).getTime()) / 60000);
+}
+
+async function loadOrders() {
+  const { data, error } = await sb
+    .from("orders")
+    .select("id,order_number,client,work_type,status,current_location,created_at,updated_at")
+    .neq("status", "picked_up")
+    .order("order_number");
+  if (error) { toast("Error: " + error.message); console.error("loadOrders error:", error); return; }
+
+  const { data: assignments, error: aErr } = await sb
+    .from("order_assignments")
+    .select("id,order_id,worker_id,note,status,paused_at,pause_reason,pause_reason_other,workers(name)")
+    .not("status", "in", "(finished,transferred)");
+  if (aErr) { toast("Error: " + aErr.message); console.error("loadAssignments error:", aErr); return; }
+
+  orders = data.map(o => ({
+    ...o,
+    assignments: assignments.filter(a => a.order_id === o.id),
+  }));
+  renderOrderList();
 }
 
 /* ---------- render lista principal ---------- */
@@ -77,13 +110,18 @@ function renderOrderList() {
       html += `<p style="font-size:13px;color:var(--text-secondary);margin:0 0 10px 2px;">Sin órdenes aquí</p>`;
     }
     list.forEach(o => {
-      const holder = o.workers ? o.workers.name : null;
-      const sub = holder || (o.status === "unassigned" ? "Sin asignar" : "");
-      const isPaused = o.status === "paused";
-      const rowClass = isPaused ? "order-row order-row-paused" : "order-row";
-      const statusHtml = isPaused
-        ? `<span class="status-tag status-paused">⏸ ${pauseMinutes(o.paused_at)}m</span>`
-        : `<span class="status-tag status-${o.status}"><span class="status-dot"></span>${STATUS_LABELS[o.status]}</span>`;
+      const active = o.assignments;
+      const anyPaused = active.some(a => a.status === "paused");
+      const names = active.map(a => a.workers ? a.workers.name : "?").join(", ");
+      const sub = names || (o.status === "pending_start" ? "Sin asignar" : "");
+      const rowClass = anyPaused ? "order-row order-row-paused" : "order-row";
+      let statusHtml;
+      if (anyPaused) {
+        const maxMin = Math.max(...active.filter(a => a.status === "paused").map(a => pauseMinutes(a.paused_at)));
+        statusHtml = `<span class="status-tag status-paused">⏸ ${maxMin}m</span>`;
+      } else {
+        statusHtml = `<span class="status-tag status-${o.status}"><span class="status-dot"></span>${STATUS_LABELS[o.status]}</span>`;
+      }
       html += `
         <div class="${rowClass}" data-id="${o.id}">
           <div class="order-row-left">
@@ -102,77 +140,89 @@ function renderOrderList() {
 
 /* ---------- detalle de orden ---------- */
 async function openDetail(id) {
-  const { data: order, error } = await sb
-    .from("orders")
-    .select("*, workers!current_holder_id(name)")
-    .eq("id", id).single();
+  const { data: order, error } = await sb.from("orders").select("*").eq("id", id).single();
   if (error) { toast("No se pudo abrir la orden"); return; }
+  const { data: assignments, error: aErr } = await sb
+    .from("order_assignments")
+    .select("id,order_id,worker_id,note,status,paused_at,pause_reason,pause_reason_other,workers(name)")
+    .eq("order_id", id)
+    .order("created_at");
+  if (aErr) { toast("No se pudieron cargar las asignaciones"); return; }
+  order.assignments = assignments;
   currentDetailOrder = order;
   renderDetail(order);
   showScreen("screen-detail");
 }
 
 function renderDetail(o) {
-  const holder = o.workers ? o.workers.name : "Sin asignar";
-  let actions = "";
-  let boxClass = "detail-timer-box";
-  let statusLine = "";
-
-  if (o.status === "unassigned" || o.status === "finished") {
-    actions = `<button class="primary-btn" id="act-deliver">Pasar orden</button>`;
-  }
-  if (o.status === "pending_start") {
-    actions = `
-      <button class="primary-btn" id="act-start">Iniciar</button>
-      <button class="secondary-btn" id="act-deliver">Pasar orden</button>`;
-  }
-  if (o.status === "in_production") {
-    actions = `
-      <div class="dual-btn-row">
-        <button class="pause-btn" id="act-pause">⏸ Pausar</button>
-        <button class="finish-btn" id="act-finish">Finalizar</button>
-      </div>`;
-  }
-  if (o.status === "paused") {
-    boxClass = "detail-timer-box paused-box";
-    statusLine = `<p class="paused-label">⏸ Pausada · ${pauseMinutes(o.paused_at)}m</p>`;
-    actions = `
-      <div class="dual-btn-row">
-        <button class="resume-btn" id="act-resume">▶ Reanudar</button>
-        <button class="finish-btn-alt" id="act-finish">Finalizar</button>
-      </div>`;
-  }
-  if (o.status === "finished") {
-    actions = `<button class="secondary-btn" id="act-control">Control final y recogida (Juan)</button>`;
-  }
-
   document.getElementById("detail-content").innerHTML = `
-    <div class="${boxClass}">
+    <div class="detail-timer-box">
       <p class="detail-order-num">${o.order_number[0]} ${o.order_number.slice(1)}</p>
-      ${statusLine}
-      ${actions}
+      <span class="detail-type-badge">${TYPE_LABELS[o.work_type]}</span>
     </div>
-    <span class="detail-type-badge">${TYPE_LABELS[o.work_type]}</span>
     <table class="detail-fields">
       <tr><td>Cliente</td><td>${o.client || "—"}</td></tr>
       <tr><td>Ubicación</td><td>${LOCATION_LABELS[o.current_location]}</td></tr>
-      <tr><td>Responsable</td><td>${holder}</td></tr>
       <tr><td>Estado</td><td>${STATUS_LABELS[o.status]}</td></tr>
     </table>
   `;
 
-  const startBtn = document.getElementById("act-start");
-  if (startBtn) startBtn.addEventListener("click", () => handleStart(o));
-  const finishBtn = document.getElementById("act-finish");
-  if (finishBtn) finishBtn.addEventListener("click", () => handleFinish(o));
-  const deliverBtn = document.getElementById("act-deliver");
-  if (deliverBtn) deliverBtn.addEventListener("click", () => handleDeliver(o));
-  const controlBtn = document.getElementById("act-control");
-  if (controlBtn) controlBtn.addEventListener("click", () => handleControl(o));
-  const pauseBtn = document.getElementById("act-pause");
-  if (pauseBtn) pauseBtn.addEventListener("click", () => handlePause(o));
-  const resumeBtn = document.getElementById("act-resume");
-  if (resumeBtn) resumeBtn.addEventListener("click", () => handleResume(o));
+  const activeAssignments = o.assignments.filter(a => a.status !== "finished" && a.status !== "transferred");
+  const rowsEl = document.getElementById("assignment-rows");
+  if (activeAssignments.length === 0) {
+    rowsEl.innerHTML = `<p style="font-size:13px;color:var(--text-secondary);text-align:center;">Nadie asignado todavía</p>`;
+  } else {
+    rowsEl.innerHTML = activeAssignments.map(a => {
+      const name = a.workers ? a.workers.name : "?";
+      const isPaused = a.status === "paused";
+      let btns = "";
+      if (a.status === "pending_start") btns = `<button class="assign-act" data-id="${a.id}" data-act="start">Iniciar</button><button class="assign-act" data-id="${a.id}" data-act="transfer">Pasar orden</button>`;
+      else if (a.status === "in_production") btns = `<button class="assign-act pause-btn" data-id="${a.id}" data-act="pause">Pausar</button><button class="assign-act finish-btn" data-id="${a.id}" data-act="finish">Finalizar</button><button class="assign-act" data-id="${a.id}" data-act="transfer">Pasar</button>`;
+      else if (a.status === "paused") btns = `<button class="assign-act resume-btn" data-id="${a.id}" data-act="resume">Reanudar</button><button class="assign-act finish-btn" data-id="${a.id}" data-act="finish">Finalizar</button><button class="assign-act" data-id="${a.id}" data-act="transfer">Pasar</button>`;
+      const reasonLine = isPaused
+        ? `<p class="assignment-note">⏸ ${pauseMinutes(a.paused_at)}m · ${a.pause_reason === "otra" ? a.pause_reason_other : (PAUSE_REASONS.find(r => r.id === a.pause_reason) || {label:"Desayuno"}).label}</p>`
+        : "";
+      return `
+        <div class="assignment-row ${isPaused ? "paused" : ""}">
+          <div class="assignment-row-top">
+            <span class="assignment-name">${name}</span>
+            <span class="assignment-status">${ASSIGN_LABELS[a.status]}</span>
+          </div>
+          ${a.note ? `<p class="assignment-note">${a.note}</p>` : ""}
+          ${reasonLine}
+          <div class="assignment-btns">${btns}</div>
+        </div>`;
+    }).join("");
+  }
+
+  document.querySelectorAll(".assign-act").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const assignmentId = btn.dataset.id;
+      const act = btn.dataset.act;
+      const assignment = o.assignments.find(a => a.id === assignmentId);
+      if (act === "start") handleStartAssignment(assignment, o);
+      if (act === "pause") handlePauseAssignment(assignment, o);
+      if (act === "resume") handleResumeAssignment(assignment, o);
+      if (act === "finish") handleFinishAssignment(assignment, o);
+      if (act === "transfer") handleTransferAssignment(assignment, o);
+    });
+  });
+
+  const addBtn = document.getElementById("btn-add-person");
+  const controlBox = document.getElementById("detail-control");
+  if (o.status === "finished") {
+    addBtn.classList.add("hidden");
+    controlBox.classList.remove("hidden");
+    controlBox.innerHTML = `<button class="secondary-btn" id="act-control">Control final y recogida (Juan)</button>`;
+    document.getElementById("act-control").addEventListener("click", () => handleControl(o));
+  } else if (o.status === "picked_up") {
+    addBtn.classList.add("hidden");
+    controlBox.classList.add("hidden");
+  } else {
+    addBtn.classList.remove("hidden");
+    controlBox.classList.add("hidden");
+    addBtn.onclick = () => handleAddPerson(o);
+  }
 }
 
 /* ---------- modal PIN reutilizable ---------- */
@@ -221,14 +271,6 @@ document.querySelectorAll('#modal-pin [data-modal-cancel]').forEach(b =>
   b.addEventListener("click", () => closePinModal(null))
 );
 
-function pinModalError(msg) {
-  const el = document.getElementById("pin-error");
-  el.textContent = msg;
-  el.classList.remove("hidden");
-  pinBuffer = "";
-  updatePinDots();
-}
-
 /* ---------- modal seleccionar trabajador ---------- */
 let workerResolve = null;
 function askWorker(title, filterFn) {
@@ -257,68 +299,178 @@ document.querySelectorAll('#modal-worker [data-modal-cancel]').forEach(b =>
   })
 );
 
-/* ---------- acciones de orden ---------- */
-async function handleStart(o) {
-  const workerId = await askWorker("¿Quién inicia el trabajo?");
-  if (!workerId) return;
-  const pin = await askPin(workerName(workerId));
+/* ---------- modal nota ---------- */
+function askNote() {
+  return new Promise(resolve => {
+    document.getElementById("note-input").value = "";
+    document.getElementById("modal-note").classList.remove("hidden");
+    const confirmBtn = document.getElementById("note-confirm");
+    const cancelBtn = document.querySelector('#modal-note [data-modal-cancel]');
+    const onConfirm = () => { cleanup(); resolve(document.getElementById("note-input").value.trim()); };
+    const onCancel = () => { cleanup(); resolve(null); };
+    function cleanup() {
+      document.getElementById("modal-note").classList.add("hidden");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+    }
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+  });
+}
+
+/* ---------- modal motivo de pausa ---------- */
+function askPauseReason() {
+  return new Promise(resolve => {
+    const list = document.getElementById("pause-reason-list");
+    const otherInput = document.getElementById("pause-reason-other");
+    const confirmBtn = document.getElementById("pause-reason-confirm");
+    otherInput.classList.add("hidden");
+    otherInput.value = "";
+    confirmBtn.disabled = true;
+    let selected = null;
+    list.innerHTML = PAUSE_REASONS.map(r => `<button class="worker-item" data-r="${r.id}">${r.label}</button>`).join("");
+    list.querySelectorAll("[data-r]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        list.querySelectorAll("[data-r]").forEach(b => b.style.borderColor = "");
+        btn.style.borderColor = "var(--border-accent, #1d4ed8)";
+        selected = btn.dataset.r;
+        otherInput.classList.toggle("hidden", selected !== "otra");
+        confirmBtn.disabled = selected === "otra" ? otherInput.value.trim() === "" : false;
+      });
+    });
+    otherInput.addEventListener("input", () => {
+      if (selected === "otra") confirmBtn.disabled = otherInput.value.trim() === "";
+    });
+    const cancelBtn = document.querySelector('#modal-pause-reason [data-modal-cancel]');
+    const onConfirm = () => {
+      cleanup();
+      resolve({ reason: selected, other: selected === "otra" ? otherInput.value.trim() : null });
+    };
+    const onCancel = () => { cleanup(); resolve(null); };
+    function cleanup() {
+      document.getElementById("modal-pause-reason").classList.add("hidden");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+    }
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+    document.getElementById("modal-pause-reason").classList.remove("hidden");
+  });
+}
+
+/* ---------- modal tipo de entrega ---------- */
+function askDeliveryType() {
+  return new Promise(resolve => {
+    const list = document.getElementById("delivery-list");
+    const confirmBtn = document.getElementById("delivery-confirm");
+    confirmBtn.disabled = true;
+    let selected = null;
+    list.innerHTML = DELIVERY_TYPES.map(d => `<button class="worker-item" data-d="${d.id}">${d.label}</button>`).join("");
+    list.querySelectorAll("[data-d]").forEach(btn => {
+      btn.addEventListener("click", () => {
+        list.querySelectorAll("[data-d]").forEach(b => b.style.borderColor = "");
+        btn.style.borderColor = "var(--border-accent, #1d4ed8)";
+        selected = btn.dataset.d;
+        confirmBtn.disabled = false;
+      });
+    });
+    const cancelBtn = document.querySelector('#modal-delivery [data-modal-cancel]');
+    const onConfirm = () => { cleanup(); resolve(selected); };
+    const onCancel = () => { cleanup(); resolve(null); };
+    function cleanup() {
+      document.getElementById("modal-delivery").classList.add("hidden");
+      confirmBtn.removeEventListener("click", onConfirm);
+      cancelBtn.removeEventListener("click", onCancel);
+    }
+    confirmBtn.addEventListener("click", onConfirm);
+    cancelBtn.addEventListener("click", onCancel);
+    document.getElementById("modal-delivery").classList.remove("hidden");
+  });
+}
+
+/* ---------- acciones sobre asignaciones ---------- */
+async function handleStartAssignment(a, o) {
+  const pin = await askPin(a.workers ? a.workers.name : "");
   if (!pin) return;
-  const { error } = await sb.rpc("start_order", { p_order_id: o.id, p_worker_id: workerId, p_pin: pin });
+  const { error } = await sb.rpc("start_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin });
   if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo iniciar"); return; }
   toast("Trabajo iniciado");
   await loadOrders(); openDetail(o.id);
 }
 
-async function handleFinish(o) {
-  const workerId = await askWorker("¿Quién finaliza el trabajo?");
-  if (!workerId) return;
-  const pin = await askPin(workerName(workerId));
+async function handlePauseAssignment(a, o) {
+  const pin = await askPin(a.workers ? a.workers.name : "");
   if (!pin) return;
-  const { error } = await sb.rpc("finish_order", { p_order_id: o.id, p_worker_id: workerId, p_pin: pin });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo finalizar"); return; }
-  toast("Trabajo finalizado");
-  await loadOrders(); openDetail(o.id);
-}
-
-async function handlePause(o) {
-  const pin = await askPin(o.workers ? o.workers.name : "");
-  if (!pin) return;
-  const { error } = await sb.rpc("pause_order", { p_order_id: o.id, p_worker_id: o.current_holder_id, p_pin: pin });
+  if (isBreakfastTime()) {
+    const { error } = await sb.rpc("pause_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin, p_reason: "desayuno" });
+    if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo pausar"); return; }
+    toast("Pausada — desayuno");
+    await loadOrders(); openDetail(o.id);
+    return;
+  }
+  const result = await askPauseReason();
+  if (!result) return;
+  const { error } = await sb.rpc("pause_assignment", {
+    p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin,
+    p_reason: result.reason, p_reason_other: result.other
+  });
   if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo pausar"); return; }
   toast("Orden pausada");
   await loadOrders(); openDetail(o.id);
 }
 
-async function handleResume(o) {
-  const pin = await askPin(o.workers ? o.workers.name : "");
+async function handleResumeAssignment(a, o) {
+  const pin = await askPin(a.workers ? a.workers.name : "");
   if (!pin) return;
-  const { error } = await sb.rpc("resume_order", { p_order_id: o.id, p_worker_id: o.current_holder_id, p_pin: pin });
+  const { error } = await sb.rpc("resume_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin });
   if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo reanudar"); return; }
   toast("Orden reanudada");
   await loadOrders(); openDetail(o.id);
 }
 
-async function handleDeliver(o) {
-  const fromId = await askWorker("¿Quién entrega la orden?");
-  if (!fromId) return;
-  const toId = await askWorker("¿A quién se entrega?", w => w.id !== fromId);
-  if (!toId) return;
-  const pin = await askPin(workerName(fromId));
+async function handleFinishAssignment(a, o) {
+  const pin = await askPin(a.workers ? a.workers.name : "");
   if (!pin) return;
-  const location = toId ? (workerName(toId) === "Kevin" || workerName(toId) === "Elmer" ? "nave2" : "nave1") : o.current_location;
-  const { error } = await sb.rpc("deliver_order", {
-    p_order_id: o.id, p_from_worker_id: fromId, p_to_worker_id: toId, p_pin: pin, p_location: location
+  const { error } = await sb.rpc("finish_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin });
+  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo finalizar"); return; }
+  toast("Trabajo finalizado");
+  await loadOrders(); openDetail(o.id);
+}
+
+async function handleTransferAssignment(a, o) {
+  const toId = await askWorker("¿A quién se transfiere?", w => w.id !== a.worker_id);
+  if (!toId) return;
+  const pin = await askPin(a.workers ? a.workers.name : "");
+  if (!pin) return;
+  const { error } = await sb.rpc("transfer_assignment", {
+    p_assignment_id: a.id, p_from_worker_id: a.worker_id, p_to_worker_id: toId, p_pin: pin
   });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo entregar"); return; }
-  toast("Orden entregada");
+  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo transferir"); return; }
+  toast("Orden transferida");
+  await loadOrders(); openDetail(o.id);
+}
+
+async function handleAddPerson(o) {
+  const already = o.assignments.filter(a => a.status !== "finished" && a.status !== "transferred").map(a => a.worker_id);
+  const workerId = await askWorker("¿Quién se agrega?", w => !already.includes(w.id));
+  if (!workerId) return;
+  const note = await askNote();
+  if (note === null) return;
+  const pin = await askPin(workerName(workerId));
+  if (!pin) return;
+  const { error } = await sb.rpc("join_order", { p_order_id: o.id, p_worker_id: workerId, p_note: note, p_pin: pin });
+  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo agregar"); return; }
+  toast("Persona agregada");
   await loadOrders(); openDetail(o.id);
 }
 
 async function handleControl(o) {
   const juan = workers.find(w => w.name === "Juan");
+  const delivery = await askDeliveryType();
+  if (!delivery) return;
   const pin = await askPin("Juan");
   if (!pin) return;
-  const { error } = await sb.rpc("control_and_pickup_order", { p_order_id: o.id, p_worker_id: juan.id, p_pin: pin });
+  const { error } = await sb.rpc("control_and_pickup_order", { p_order_id: o.id, p_worker_id: juan.id, p_pin: pin, p_delivery: delivery });
   if (error) { toast(error.message.includes("Solo Juan") ? "Solo Juan puede hacer esto" : "PIN incorrecto"); return; }
   toast("Orden entregada al cliente");
   await loadOrders(); showScreen("screen-main");
@@ -326,7 +478,7 @@ async function handleControl(o) {
 
 /* ---------- nueva orden ---------- */
 document.getElementById("btn-new-order").addEventListener("click", () => {
-  newOrderDigits = ""; newOrderType = null;
+  newOrderDigits = ""; newOrderType = null; newOrderNave = null;
   document.getElementById("input-client").value = "";
   document.querySelectorAll(".type-btn").forEach(b => b.classList.remove("selected"));
   document.getElementById("new-order-step2").classList.add("hidden");
@@ -346,35 +498,50 @@ function updateNewOrderDisplay() {
 buildKeypad(document.getElementById("keypad-neworder"),
   (d) => { if (newOrderDigits.length < 4) { newOrderDigits += d; updateNewOrderDisplay(); } },
   () => { newOrderDigits = newOrderDigits.slice(0, -1); updateNewOrderDisplay(); },
-  () => {} // check no se usa aquí, se avanza automático a los 4 dígitos
+  () => {}
 );
-document.querySelectorAll(".type-btn").forEach(btn => {
+document.querySelectorAll("[data-type]").forEach(btn => {
   btn.addEventListener("click", () => {
-    document.querySelectorAll(".type-btn").forEach(b => b.classList.remove("selected"));
+    document.querySelectorAll("[data-type]").forEach(b => b.classList.remove("selected"));
     btn.classList.add("selected");
     newOrderType = btn.dataset.type;
+    if (!newOrderNave) {
+      newOrderNave = newOrderType === "spa_cover" ? "nave1" : "nave2";
+      document.querySelectorAll("[data-nave]").forEach(b => b.classList.toggle("selected", b.dataset.nave === newOrderNave));
+    }
+    checkNewOrderReady();
+  });
+});
+document.querySelectorAll("[data-nave]").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("[data-nave]").forEach(b => b.classList.remove("selected"));
+    btn.classList.add("selected");
+    newOrderNave = btn.dataset.nave;
     checkNewOrderReady();
   });
 });
 document.getElementById("input-client").addEventListener("input", checkNewOrderReady);
 function checkNewOrderReady() {
   const client = document.getElementById("input-client").value.trim();
-  document.getElementById("btn-continue-neworder").disabled = !(client && newOrderType);
+  document.getElementById("btn-continue-neworder").disabled = !(client && newOrderType && newOrderNave);
 }
 
 document.getElementById("btn-continue-neworder").addEventListener("click", async () => {
   const client = document.getElementById("input-client").value.trim();
-  const creatorId = await askWorker("¿Quién crea la orden?", w => w.name === "Jorge" || w.name === "Juan");
-  if (!creatorId) return;
-  const pin = await askPin(workerName(creatorId));
+  const naveWorkers = newOrderNave === "nave1" ? ["Jorge","Andrés","Mahicol"] : ["Kevin","Elmer","Juan"];
+  const workerId = await askWorker("Asignar a", w => naveWorkers.includes(w.name));
+  if (!workerId) return;
+  const juan = workers.find(w => w.name === "Juan");
+  const pin = await askPin("Juan");
   if (!pin) return;
   const fullNumber = "1" + newOrderDigits;
   const { error } = await sb.rpc("create_order", {
     p_order_number: fullNumber, p_client: client, p_work_type: newOrderType,
-    p_worker_id: creatorId, p_pin: pin
+    p_nave: newOrderNave, p_worker_id: workerId, p_creator_id: juan.id, p_pin: pin
   });
   if (error) {
-    toast("Error: " + error.message);
+    if (error.message.includes("duplicate")) toast("Ese número de orden ya existe");
+    else toast("Error: " + error.message);
     console.error("create_order error:", error);
     return;
   }
@@ -484,7 +651,7 @@ async function loadReport() {
   Object.values(byOrder).forEach(evList => {
     for (let i = 0; i < evList.length; i++) {
       if (evList[i].event_type === "started") {
-        const next = evList.slice(i + 1).find(e => e.event_type === "finished");
+        const next = evList.slice(i + 1).find(e => e.event_type === "finished" && e.from_worker_id === evList[i].from_worker_id);
         if (next) {
           const ms = new Date(next.occurred_at) - new Date(evList[i].occurred_at);
           const name = workerName(evList[i].from_worker_id) || "Desconocido";
@@ -526,18 +693,15 @@ async function loadReport() {
       renderOrderList();
     }
     if (document.getElementById("screen-detail").classList.contains("active") && currentDetailOrder) {
-      renderDetail(currentDetailOrder);
+      openDetail(currentDetailOrder.id);
     }
   }, 30000);
 
   sb.channel("orders-realtime")
-    .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, async (payload) => {
-      await loadOrders();
-      if (
-        document.getElementById("screen-detail").classList.contains("active") &&
-        currentDetailOrder &&
-        payload.new && payload.new.id === currentDetailOrder.id
-      ) {
+    .on("postgres_changes", { event: "*", schema: "public", table: "orders" }, () => loadOrders())
+    .on("postgres_changes", { event: "*", schema: "public", table: "order_assignments" }, () => {
+      loadOrders();
+      if (document.getElementById("screen-detail").classList.contains("active") && currentDetailOrder) {
         openDetail(currentDetailOrder.id);
       }
     })
