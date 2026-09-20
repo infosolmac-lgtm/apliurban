@@ -393,7 +393,7 @@ async function handleStartAssignment(a, o) {
   const pin = await askPin(a.workers ? a.workers.name : "");
   if (!pin) return;
   const { error } = await sb.rpc("start_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo iniciar"); return; }
+  if (error) { toast("Error: " + error.message); console.error("start_assignment error:", error); return; }
   toast("Trabajo iniciado");
   await loadOrders(); openDetail(o.id);
 }
@@ -403,7 +403,7 @@ async function handlePauseAssignment(a, o) {
   if (!pin) return;
   if (isBreakfastTime()) {
     const { error } = await sb.rpc("pause_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin, p_reason: "desayuno" });
-    if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo pausar"); return; }
+    if (error) { toast("Error: " + error.message); console.error("pause_assignment error:", error); return; }
     toast("Pausada — desayuno");
     await loadOrders(); openDetail(o.id);
     return;
@@ -414,7 +414,7 @@ async function handlePauseAssignment(a, o) {
     p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin,
     p_reason: result.reason, p_reason_other: result.other
   });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo pausar"); return; }
+  if (error) { toast("Error: " + error.message); console.error("pause_assignment error:", error); return; }
   toast("Orden pausada");
   await loadOrders(); openDetail(o.id);
 }
@@ -423,7 +423,7 @@ async function handleResumeAssignment(a, o) {
   const pin = await askPin(a.workers ? a.workers.name : "");
   if (!pin) return;
   const { error } = await sb.rpc("resume_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo reanudar"); return; }
+  if (error) { toast("Error: " + error.message); console.error("resume_assignment error:", error); return; }
   toast("Orden reanudada");
   await loadOrders(); openDetail(o.id);
 }
@@ -432,7 +432,7 @@ async function handleFinishAssignment(a, o) {
   const pin = await askPin(a.workers ? a.workers.name : "");
   if (!pin) return;
   const { error } = await sb.rpc("finish_assignment", { p_assignment_id: a.id, p_worker_id: a.worker_id, p_pin: pin });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo finalizar"); return; }
+  if (error) { toast("Error: " + error.message); console.error("finish_assignment error:", error); return; }
   toast("Trabajo finalizado");
   await loadOrders(); openDetail(o.id);
 }
@@ -445,7 +445,7 @@ async function handleTransferAssignment(a, o) {
   const { error } = await sb.rpc("transfer_assignment", {
     p_assignment_id: a.id, p_from_worker_id: a.worker_id, p_to_worker_id: toId, p_pin: pin
   });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo transferir"); return; }
+  if (error) { toast("Error: " + error.message); console.error("transfer_assignment error:", error); return; }
   toast("Orden transferida");
   await loadOrders(); openDetail(o.id);
 }
@@ -459,7 +459,7 @@ async function handleAddPerson(o) {
   const pin = await askPin(workerName(workerId));
   if (!pin) return;
   const { error } = await sb.rpc("join_order", { p_order_id: o.id, p_worker_id: workerId, p_note: note, p_pin: pin });
-  if (error) { toast(error.message.includes("PIN") ? "PIN incorrecto" : "No se pudo agregar"); return; }
+  if (error) { toast("Error: " + error.message); console.error("join_order error:", error); return; }
   toast("Persona agregada");
   await loadOrders(); openDetail(o.id);
 }
@@ -471,7 +471,7 @@ async function handleControl(o) {
   const pin = await askPin("Juan");
   if (!pin) return;
   const { error } = await sb.rpc("control_and_pickup_order", { p_order_id: o.id, p_worker_id: juan.id, p_pin: pin, p_delivery: delivery });
-  if (error) { toast(error.message.includes("Solo Juan") ? "Solo Juan puede hacer esto" : "PIN incorrecto"); return; }
+  if (error) { toast("Error: " + error.message); console.error("control_and_pickup_order error:", error); return; }
   toast("Orden entregada al cliente");
   await loadOrders(); showScreen("screen-main");
 }
