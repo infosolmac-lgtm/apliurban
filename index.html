@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Apliurban — Control de producción</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#1d4ed8">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- PANTALLA PRINCIPAL -->
+  <div id="screen-main" class="screen active">
+    <header class="topbar">
+      <h1>Apliurban</h1>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <button id="btn-refresh" class="icon-btn" title="Actualizar">🔄</button>
+        <button id="btn-reports" class="icon-btn" title="Reportes">📊</button>
+      </div>
+    </header>
+    <div id="session-bar" class="session-bar">
+      <span id="session-name"></span>
+      <button id="btn-logout" class="link-btn" style="width:auto;padding:0;">Cerrar sesión</button>
+    </div>
+
+    <div id="summary" class="summary"></div>
+
+    <div id="order-list" class="order-list"></div>
+
+    <button id="btn-new-order" class="fab-btn">+ Nueva orden</button>
+  </div>
+
+  <!-- DETALLE DE ORDEN -->
+  <div id="screen-detail" class="screen">
+    <header class="topbar">
+      <button class="back-btn" data-back="main">←</button>
+      <h1>Detalle de orden</h1>
+    </header>
+    <div id="detail-content" class="detail-content"></div>
+    <div id="assignment-rows" class="assignment-rows"></div>
+    <button id="btn-add-person" class="secondary-btn hidden" style="margin-top:10px;">+ Agregar persona</button>
+    <div id="detail-control" class="hidden" style="margin-top:14px;"></div>
+  </div>
+
+  <!-- NUEVA ORDEN -->
+  <div id="screen-new-order" class="screen">
+    <header class="topbar">
+      <button class="back-btn" data-back="main">←</button>
+      <h1>Nueva orden</h1>
+    </header>
+    <div class="new-order-content">
+      <p class="field-label">Número de orden</p>
+      <div class="order-display"><span>1</span> <span id="new-order-digits">_ _ _ _</span></div>
+      <div id="keypad-neworder" class="keypad"></div>
+
+      <div id="new-order-step2" class="hidden">
+        <p class="field-label">Cliente</p>
+        <input type="text" id="input-client" placeholder="Nombre del cliente" maxlength="40">
+
+        <p class="field-label">Tipo de trabajo</p>
+        <div class="type-toggle">
+          <button class="type-btn" data-type="spa_cover">Cubierta SPA</button>
+          <button class="type-btn" data-type="custom_tarp">Lona a medida</button>
+        </div>
+
+        <p class="field-label">Nave (sugerida según el tipo, editable)</p>
+        <div class="type-toggle">
+          <button class="type-btn" data-nave="nave1">Nave 1</button>
+          <button class="type-btn" data-nave="nave2">Nave 2</button>
+        </div>
+
+        <button id="btn-continue-neworder" class="primary-btn" disabled>Continuar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL MOTIVO DE PAUSA -->
+  <div id="modal-pause-reason" class="modal hidden">
+    <div class="modal-box">
+      <p class="field-label">Motivo de la pausa</p>
+      <div id="pause-reason-list" class="worker-list"></div>
+      <input type="text" id="pause-reason-other" class="hidden" placeholder="Especifica el motivo" style="margin-top:8px;">
+      <button id="pause-reason-confirm" class="primary-btn" style="margin-top:10px;" disabled>Confirmar pausa</button>
+      <button class="link-btn" data-modal-cancel>Cancelar</button>
+    </div>
+  </div>
+
+  <!-- MODAL TIPO DE ENTREGA -->
+  <div id="modal-delivery" class="modal hidden">
+    <div class="modal-box">
+      <p class="field-label">Tipo de entrega</p>
+      <div id="delivery-list" class="worker-list"></div>
+      <button id="delivery-confirm" class="primary-btn" style="margin-top:10px;" disabled>Confirmar recogida</button>
+      <button class="link-btn" data-modal-cancel>Cancelar</button>
+    </div>
+  </div>
+
+  <!-- MODAL PIN -->
+  <div id="modal-pin" class="modal hidden">
+    <div class="modal-box">
+      <p id="pin-title" class="field-label">Introduzca PIN</p>
+      <p id="pin-worker-name" class="pin-worker"></p>
+      <div class="pin-dots">
+        <span class="dot" data-i="0"></span><span class="dot" data-i="1"></span>
+        <span class="dot" data-i="2"></span><span class="dot" data-i="3"></span>
+      </div>
+      <div id="keypad-pin" class="keypad"></div>
+      <p id="pin-error" class="pin-error hidden"></p>
+      <button class="link-btn" data-modal-cancel>Cancelar</button>
+    </div>
+  </div>
+
+  <!-- MODAL SELECCIONAR TRABAJADOR -->
+  <div id="modal-worker" class="modal hidden">
+    <div class="modal-box">
+      <p id="worker-modal-title" class="field-label">Seleccionar trabajador</p>
+      <div id="worker-list" class="worker-list"></div>
+      <button class="link-btn" data-modal-cancel>Cancelar</button>
+    </div>
+  </div>
+
+  <!-- PANTALLA REPORTES -->
+  <div id="screen-reports" class="screen">
+    <header class="topbar">
+      <button class="back-btn" data-back="main">←</button>
+      <h1>Reportes</h1>
+    </header>
+    <div class="report-tabs">
+      <button class="report-tab active" data-period="daily">Diario</button>
+      <button class="report-tab" data-period="weekly">Semanal</button>
+      <button class="report-tab" data-period="monthly">Mensual</button>
+    </div>
+    <div id="report-range-picker" class="report-range"></div>
+    <div id="report-content" class="report-content"></div>
+  </div>
+
+  <!-- MODAL NOTA (agregar persona) -->
+  <div id="modal-note" class="modal hidden">
+    <div class="modal-box">
+      <p class="field-label">Nota (opcional)</p>
+      <input type="text" id="note-input" placeholder="Ej. núcleo poliespán, cosiendo lona" maxlength="60">
+      <button id="note-confirm" class="primary-btn" style="margin-top:10px;">Continuar</button>
+      <button class="link-btn" data-modal-cancel>Cancelar</button>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
